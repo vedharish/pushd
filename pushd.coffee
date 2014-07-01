@@ -21,7 +21,12 @@ if settings.server?.redis_auth?
 
 createSubscriber = (fields, app_id, cb) ->
     logger.verbose "creating subscriber proto = #{fields.proto}, token = #{fields.token}, appid = APP11"
-    throw new Error("Invalid value for `proto'") unless service = pushServices.getService(fields.proto)
+    if fields.proto == 'gcm'
+        logger.error "create subscriber checking service #{fields.proto+app_id}"
+        throw new Error("Invalid value for `proto'") unless service = pushServices.getService(fields.proto+app_id)
+    else
+        logger.error "create subscriber checking service #{fields.proto}"
+        throw new Error("Invalid value for `proto'") unless service = pushServices.getService(fields.proto)
     throw new Error("Invalid value for `token'") unless fields.token = service.validateToken(fields.token)
     Subscriber::create(redis, app_id, fields, cb)
 
@@ -35,6 +40,14 @@ for name, conf of settings when conf.enabled
     if name is 'event-source'
         # special case for EventSource which isn't a pluggable push protocol
         eventSourceEnabled = yes
+    else if name is 'gcm'
+        for key, appid  of conf.key
+            tempConf = {}
+            tempConf.key = key
+            tempConf.appId = appid
+            serviceName = name+tempConf.appId
+            logger.info "Registering #{serviceName} with key #{tempConf.key} and appId #{tempConf.appId}"
+            pushServices.addService(serviceName, new conf.class(tempConf, logger, tokenResolver))
     else
         pushServices.addService(name, new conf.class(conf, logger, tokenResolver))
 eventPublisher = new EventPublisher(pushServices)
