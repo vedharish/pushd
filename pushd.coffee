@@ -20,13 +20,13 @@ if settings.server?.redis_auth?
     redis.auth(settings.server.redis_auth)
 
 createSubscriber = (fields, cb) ->
-    logger.verbose "creating subscriber proto = #{fields.proto}, token = #{fields.token}"
+    logger.verbose "creating subscriber proto = #{fields.proto}, token = #{fields.token}, appid = APP11"
     throw new Error("Invalid value for `proto'") unless service = pushServices.getService(fields.proto)
     throw new Error("Invalid value for `token'") unless fields.token = service.validateToken(fields.token)
-    Subscriber::create(redis, fields, cb)
+    Subscriber::create(redis, 'APP11', fields, cb)
 
 tokenResolver = (proto, token, cb) ->
-    Subscriber::getInstanceFromToken redis, proto, token, cb
+    Subscriber::getInstanceFromToken redis, 'APP11', proto, token, cb
 
 eventSourceEnabled = no
 pushServices = new PushServices()
@@ -63,21 +63,23 @@ app.configure ->
 
 app.param 'subscriber_id', (req, res, next, id) ->
     try
-        req.subscriber = new Subscriber(redis, req.params.subscriber_id)
+        appid = 'APP11'
+        req.subscriber = new Subscriber(redis, req.params.subscriber_id, appid)
         delete req.params.subscriber_id
         next()
     catch error
         res.json error: error.message, 400
 
-getEventFromId = (id) ->
-    return new Event(redis, id)
+getEventFromId = (id, appid) ->
+    return new Event(redis, id, appid)
 
 testSubscriber = (subscriber) ->
     pushServices.push(subscriber, null, new Payload({msg: "Test", "data.test": "ok"}))
 
 app.param 'event_id', (req, res, next, id) ->
     try
-        req.event = getEventFromId(req.params.event_id)
+        appid = 'APP11'
+        req.event = getEventFromId(req.params.event_id, appid)
         delete req.params.event_id
         next()
     catch error

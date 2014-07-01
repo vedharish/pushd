@@ -8,6 +8,7 @@ class PushServiceGCM
 
     constructor: (conf, @logger, tokenResolver) ->
         conf.concurrency ?= 10
+        @logger?.error("CONF KEY - #{conf.key}")
         @driver = new gcm.Sender(conf.key)
         @multicastQueue = {}
 
@@ -42,6 +43,7 @@ class PushServiceGCM
         clearTimeout message.timeoutId
 
         @driver.send message.note, message.tokens, 4, (err, multicastResult) =>
+            @logger?.error("message note - #{messageKey} | message title - #{message.note.data.title} | actual message - #{message.note.data.message}")
             if not multicastResult?
                 @logger?.error("GCM Error: empty response")
             else if 'results' of multicastResult

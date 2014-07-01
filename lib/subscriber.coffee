@@ -4,27 +4,27 @@ Event = require('./event').Event
 logger = require 'winston'
 
 class Subscriber
-    getInstanceFromToken: (redis, proto, token, cb) ->
+    getInstanceFromToken: (redis, appid, proto, token, cb) ->
         return until cb
 
         throw new Error("Missing redis connection") if not redis?
         throw new Error("Missing mandatory `proto' field") if not proto?
         throw new Error("Missing mandatory `token' field") if not token?
 
-        redis.hget "tokenmap", "#{proto}:#{token}", (err, id) =>
+        redis.hget "#{appid}:tokenmap", "#{proto}:#{token}", (err, id) =>
             if id?
                 # looks like this subscriber is already registered
-                redis.exists "subscriber:#{id}", (err, exists) =>
+                redis.exists "#{appid}:subscriber:#{id}", (err, exists) =>
                     if exists
-                        cb(new Subscriber(redis, id))
+                        cb(new Subscriber(redis, id, appid))
                     else
                         # duh!? the global list reference an unexisting object, fix this inconsistency and return no subscriber
-                        redis.hdel "tokenmap", "#{proto}:#{token}", =>
+                        redis.hdel "#{appid}:tokenmap", "#{proto}:#{token}", =>
                             cb(null)
             else
                 cb(null) # No subscriber for this token
 
-    create: (redis, fields, cb, tentatives=0) ->
+    create: (redis, appid, fields, cb, tentatives=0) ->
         return until cb
 
         throw new Error("Missing redis connection") if not redis?
@@ -36,7 +36,7 @@ class Subscriber
             throw new Error "Can't find free uniq id"
 
         # verify if token is already registered
-        Subscriber::getInstanceFromToken redis, fields.proto, fields.token, (subscriber) =>
+        Subscriber::getInstanceFromToken redis, appid, fields.proto, fields.token, (subscriber) =>
             if subscriber?
                 # this subscriber is already registered
                 delete fields.token
@@ -48,53 +48,53 @@ class Subscriber
                 crypto.randomBytes 8, (ex, buf) =>
                     # generate a base64url random uniq id
                     id = buf.toString('base64').replace(/\=+$/, '').replace(/\//g, '_').replace(/\+/g, '-')
-                    redis.watch "subscriber:#{id}", =>
-                        redis.exists "subscriber:#{id}", (err, exists) =>
+                    redis.watch "#{appid}:subscriber:#{id}", =>
+                        redis.exists "#{appid}:subscriber:#{id}", (err, exists) =>
                             if exists
                                 # already exists, rollback and retry with another id
                                 redis.discard =>
-                                    return Subscriber::create(redis, fields, cb, tentatives + 1)
+                                    return Subscriber::create(redis, appid, fields, cb, tentatives + 1)
                             else
                                 fields.created = fields.updated = Math.round(new Date().getTime() / 1000)
                                 redis.multi()
                                     # register subscriber token to db id
-                                    .hsetnx("tokenmap", "#{fields.proto}:#{fields.token}", id)
+                                    .hsetnx("#{appid}:tokenmap", "#{fields.proto}:#{fields.token}", id)
                                     # register subscriber to global list
-                                    .zadd("subscribers", 0, id)
+                                    .zadd("#{appid}:subscribers", 0, id)
                                     # save fields
-                                    .hmset("subscriber:#{id}", fields)
+                                    .hmset("#{appid}:subscriber:#{id}", fields)
                                     .exec (err, results) =>
                                         if results is null
                                             # Transction discarded due to a parallel creation of the watched subscriber key
                                             # Try again in order to get the peer created subscriber
-                                            return Subscriber::create(redis, fields, cb, tentatives + 1)
+                                            return Subscriber::create(redis, appid, fields, cb, tentatives + 1)
                                         if not results[0]
                                             # Unlikly race condition: another client registered the same token at the same time
                                             # Rollback and retry the registration so we can return the peer subscriber id
-                                            redis.del "subscriber:#{id}", =>
-                                                return Subscriber::create(redis, fields, cb, tentatives + 1)
+                                            redis.del "#{appid}:subscriber:#{id}", =>
+                                                return Subscriber::create(redis, appid, fields, cb, tentatives + 1)
                                         else
                                             # done
-                                            cb(new Subscriber(redis, id), created=true, tentatives)
+                                            cb(new Subscriber(redis, id, appid), created=true, tentatives)
 
-    constructor: (@redis, @id) ->
+    constructor: (@redis, @id, @appid) ->
         @info = null
-        @key = "subscriber:#{@id}"
+        @key = "#{@appid}:subscriber:#{@id}"
 
     delete: (cb) ->
         @redis.multi()
             # get subscriber's token
             .hmget(@key, 'proto', 'token')
             # gather subscriptions
-            .zrange("subscriber:#{@id}:evts", 0, -1)
+            .zrange("#{@appid}:subscriber:#{@id}:evts", 0, -1)
             .exec (err, results) =>
                 [proto, token] = results[0]
                 events = results[1]
                 multi = @redis.multi()
                     # remove from subscriber token to id map
-                    .hdel("tokenmap", "#{proto}:#{token}")
+                    .hdel("#{@appid}:tokenmap", "#{proto}:#{token}")
                     # remove from global subscriber list
-                    .zrem("subscribers", @id)
+                    .zrem("#{@appid}:subscribers", @id)
                     # remove subscriber info hash
                     .del(@key)
                     # remove subscription list
@@ -102,9 +102,9 @@ class Subscriber
 
                 # unsubscribe subscriber from all subscribed events
                 for eventName in events
-                    multi.zrem("event:#{eventName}:subs", @id)
+                    multi.zrem("#{@appid}:event:#{eventName}:subs", @id)
                     # count subscribers after zrem
-                    multi.zcard("event:#{eventName}:subs")
+                    multi.zcard("#{@appid}:event:#{eventName}:subs")
 
                 multi.exec (err, results) =>
                     @info = null # flush cache
@@ -139,7 +139,7 @@ class Subscriber
         fieldsAndValues.updated = Math.round(new Date().getTime() / 1000)
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # edit fields
             .hmset(@key, fieldsAndValues)
             .exec (err, results) =>
@@ -154,7 +154,7 @@ class Subscriber
     incr: (field, cb) ->
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # increment field
             .hincrby(@key, field, 1)
             .exec (err, results) =>
@@ -171,7 +171,7 @@ class Subscriber
         return unless cb
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # gather all subscriptions
             .zrange("#{@key}:evts", 0, -1, 'WITHSCORES')
             .exec (err, results) =>
@@ -191,7 +191,7 @@ class Subscriber
         return unless cb
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # gather all subscriptions
             .zscore("#{@key}:evts", event.name)
             .exec (err, results) =>
@@ -205,7 +205,7 @@ class Subscriber
     addSubscription: (event, options, cb) ->
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # add event to subscriber's subscriptions list
             .zadd("#{@key}:evts", options, event.name)
             # add subscriber to event's subscribers list
@@ -213,15 +213,16 @@ class Subscriber
             # set the event created field if not already there (event is lazily created on first subscription)
             .hsetnx(event.key, "created", Math.round(new Date().getTime() / 1000))
             # lazily add event to the global event list
-            .sadd("events", event.name)
+            .sadd("#{@appid}:events", event.name)
             .exec (err, results) =>
                 if results[0]? # subscriber exists?
-                    logger.verbose "Registered subscriber #{@id} to event #{event.name}"
+                    logger.verbose "Registered subscriber #{@id} to event #{event.name} app #{@appid}"
                     cb(results[1] is 1) if cb
                 else
                     # Tried to add a sub on an unexisting subscriber, remove just added sub
                     # This is an exception so we don't first check subscriber existance before to add sub,
                     # but we manually rollback the subscription in case of error
+                    logger.error "Subscription Error zscore #{@appid}:subscribers zadd #{@key}:evts"
                     @redis.multi()
                         # remove the wrongly created subs subscriber relation
                         .del("#{@key}:evts", event.name)
@@ -238,7 +239,7 @@ class Subscriber
     removeSubscription: (event, cb) ->
         @redis.multi()
             # check subscriber existance
-            .zscore("subscribers", @id)
+            .zscore("#{@appid}:subscribers", @id)
             # remove event from subscriber's subscriptions list
             .zrem("#{@key}:evts", event.name)
             # remove the subscriber from the event's subscribers list
@@ -253,7 +254,7 @@ class Subscriber
                 if results[0]? # subscriber exists?
                     wasRemoved = results[1] is 1 # true if removed, false if wasn't subscribed
                     if wasRemoved
-                        logger.verbose "Subscriber #{@id} unregistered from event #{event.name}"
+                        logger.verbose "Subscriber #{@id} unregistered from event #{event.name} app #{@appid}"
                     cb(wasRemoved) if cb
                 else
                     cb(null) if cb # null if subscriber doesn't exist

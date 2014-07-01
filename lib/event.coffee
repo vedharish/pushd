@@ -5,10 +5,10 @@ class Event
     OPTION_IGNORE_MESSAGE: 1
     name_format: /^[a-zA-Z0-9:._-]{1,100}$/
 
-    constructor: (@redis, @name) ->
+    constructor: (@redis, @name, @appid) ->
         throw new Error("Missing redis connection") if not redis?
         throw new Error('Invalid event name ' + @name) if not Event::name_format.test @name
-        @key = "event:#{@name}"
+        @key = "#{appid}:event:#{@name}"
 
     info: (cb) ->
         return until cb
@@ -32,7 +32,7 @@ class Event
         if @name is 'broadcast'
             cb(true)
         else
-            @redis.sismember "events", @name, (err, exists) =>
+            @redis.sismember "#{@appid}:events", @name, (err, exists) =>
                 cb(exists)
 
     delete: (cb) ->
@@ -51,7 +51,7 @@ class Event
                 # delete event's info hash
                 .del(@key)
                 # remove event from global event list
-                .srem("events", @name)
+                .srem("#{@appid}:events", @name)
                 .exec (err, results) ->
                     cb(results[1] > 0) if cb
 
@@ -71,12 +71,12 @@ class Event
             # if event is broadcast, do not treat score as subscription option, ignore it
             performAction = (subscriberId, subOptions) =>
                 return (done) =>
-                    action(new Subscriber(@redis, subscriberId), {}, done)
+                    action(new Subscriber(@redis, subscriberId, @appid), {}, done)
         else
             performAction = (subscriberId, subOptions) =>
                 options = {ignore_message: (subOptions & Event::OPTION_IGNORE_MESSAGE) isnt 0}
                 return (done) =>
-                    action(new Subscriber(@redis, subscriberId), options, done)
+                    action(new Subscriber(@redis, subscriberId, @appid), options, done)
 
         subscribersKey = if @name is 'broadcast' then 'subscribers' else "#{@key}:subs"
         page = 0
