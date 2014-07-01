@@ -11,11 +11,11 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
     authorize ?= (realm) ->
 
     # subscriber registration
-    app.post '/subscribers', authorize('register'), (req, res) ->
+    app.post '/app/:app_id/subscribers', authorize('register'), (req, res) ->
         logger.verbose "Registering subscriber: " + JSON.stringify req.body
         try
             fields = filterFields(req.body)
-            createSubscriber fields, (subscriber, created) ->
+            createSubscriber fields, req.app_id, (subscriber, created) ->
                 subscriber.get (info) ->
                     info.id = subscriber.id
                     res.header 'Location', "/subscriber/#{subscriber.id}"
@@ -25,7 +25,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
             res.json error: error.message, 400
 
     # Get subscriber info
-    app.get '/subscriber/:subscriber_id', authorize('register'), (req, res) ->
+    app.get '/app/:app_id/subscriber/:subscriber_id', authorize('register'), (req, res) ->
         req.subscriber.get (fields) ->
             if not fields?
                 logger.error "No subscriber #{req.subscriber.id}"
@@ -34,7 +34,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
             res.json fields, if fields? then 200 else 404
 
     # Edit subscriber info
-    app.post '/subscriber/:subscriber_id', authorize('register'), (req, res) ->
+    app.post '/app/:app_id/subscriber/:subscriber_id', authorize('register'), (req, res) ->
         logger.verbose "Setting new properties for #{req.subscriber.id}: " + JSON.stringify(req.body)
         fields = filterFields(req.body)
         req.subscriber.set fields, (edited) ->
@@ -43,18 +43,18 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
             res.send if edited then 204 else 404
 
     # Unregister subscriber
-    app.delete '/subscriber/:subscriber_id', authorize('register'), (req, res) ->
+    app.delete '/app/:app_id/subscriber/:subscriber_id', authorize('register'), (req, res) ->
         req.subscriber.delete (deleted) ->
             if not deleted
                 logger.error "No subscriber #{req.subscriber.id}"
             res.send if deleted then 204 else 404
 
-    app.post '/subscriber/:subscriber_id/test', authorize('register'), (req, res) ->
+    app.post '/app/:app_id/subscriber/:subscriber_id/test', authorize('register'), (req, res) ->
         testSubscriber(req.subscriber)
         res.send 201
 
     # Get subscriber subscriptions
-    app.get '/subscriber/:subscriber_id/subscriptions', authorize('register'), (req, res) ->
+    app.get '/app/:app_id/subscriber/:subscriber_id/subscriptions', authorize('register'), (req, res) ->
         req.subscriber.getSubscriptions (subs) ->
             if subs?
                 subsAndOptions = {}
@@ -67,7 +67,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
                 res.send 404
 
     # Set subscriber subscriptions
-    app.post '/subscriber/:subscriber_id/subscriptions', authorize('register'), (req, res) ->
+    app.post '/app/:app_id/subscriber/:subscriber_id/subscriptions', authorize('register'), (req, res) ->
         subsToAdd = req.body
         logger.verbose "Setting subscriptions for #{req.subscriber.id}: " + JSON.stringify(req.body)
         for eventId, optionsDict of req.body
@@ -119,7 +119,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
                 res.send if result then 200 else 400
 
     # Get subscriber subscription options
-    app.get '/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
+    app.get '/app/:app_id/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
         req.subscriber.getSubscription req.event, (options) ->
             if options?
                 res.json {ignore_message: (options & req.event.OPTION_IGNORE_MESSAGE) isnt 0}
@@ -128,7 +128,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
                 res.send 404
 
     # Subscribe a subscriber to an event
-    app.post '/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
+    app.post '/app/:app_id/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
         options = 0
         if parseInt req.body.ignore_message
             options |= req.event.OPTION_IGNORE_MESSAGE
@@ -140,7 +140,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
                 res.send 404
 
     # Unsubscribe a subscriber from an event
-    app.delete '/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
+    app.delete '/app/:app_id/subscriber/:subscriber_id/subscriptions/:event_id', authorize('register'), (req, res) ->
         req.subscriber.removeSubscription req.event, (deleted) ->
             if not deleted?
                 logger.error "No subscriber #{req.subscriber.id}"
@@ -149,7 +149,7 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
             res.send if deleted then 204 else 404
 
     # Event stats
-    app.get '/event/:event_id', authorize('register'), (req, res) ->
+    app.get '/app/:app_id/event/:event_id', authorize('register'), (req, res) ->
         req.event.info (info) ->
             if not info?
                 logger.error "No event #{req.event.name}"
@@ -158,12 +158,12 @@ exports.setupRestApi = (app, createSubscriber, getEventFromId, authorize, testSu
             res.json info, if info? then 200 else 404
 
     # Publish an event
-    app.post '/event/:event_id', authorize('publish'), (req, res) ->
+    app.post '/app/:app_id/event/:event_id', authorize('publish'), (req, res) ->
         res.send 204
         eventPublisher.publish(req.event, req.body)
 
     # Delete an event
-    app.delete '/event/:event_id', authorize('publish'), (req, res) ->
+    app.delete '/app/:app_id/event/:event_id', authorize('publish'), (req, res) ->
         req.event.delete (deleted) ->
             if not deleted
                 logger.error "No event #{req.event.name}"
